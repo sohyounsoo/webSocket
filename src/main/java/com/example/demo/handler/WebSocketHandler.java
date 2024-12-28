@@ -8,7 +8,6 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
 import java.util.Map;
-import java.util.StringTokenizer;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Component
@@ -16,8 +15,6 @@ public class WebSocketHandler extends TextWebSocketHandler {
 
     private static final ConcurrentHashMap<String, WebSocketSession> CLIENTS
             = new ConcurrentHashMap<String, WebSocketSession>();
-
-    private static StringTokenizer st;
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
@@ -40,52 +37,72 @@ public class WebSocketHandler extends TextWebSocketHandler {
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage textMessage) throws Exception {
         String sessionId = session.getId();
-        String[] sessionIdStrings = sessionId.split("-");
+        String senderId = sessionId.split("-")[0]; // 보낸 사람 ID
 
-        // 대화창에 표시할 보낸 사람 아이디
-        String senderId = sessionIdStrings[0];
-
-        // 메시지 내용 파싱
         String textMessagePayload = textMessage.getPayload();
+        String[] parts = textMessagePayload.split(" ", 2);
 
-        // /귓속말:(sessionId 앞 부분) (내용) <- 개인 메시지 양식
-        if (textMessagePayload.contains("/귓속말")) {
-            st = new StringTokenizer(textMessagePayload, " ");
-            String partialReceiverSessionId = st.nextToken().replaceAll("/귓속말:", "");
-
-            // 세션 id의 일부분만을 가지고 전체 세션 id를 찾는 코드
-            // 중복 가능성이 있지만 보다 짧은 세션 id 사용을 위해 적용
-            String receiverSessionId = "";
-            for (Map.Entry<String, WebSocketSession> entry : CLIENTS.entrySet()) {
-                if (entry.getKey().contains(partialReceiverSessionId)) {
-                    receiverSessionId = entry.getKey();
-                }
+        if (textMessagePayload.startsWith("/귓속말")) {
+            if (parts.length < 2) {
+                // 귓속말 형식 안내
+                session.sendMessage(new TextMessage("귓속말 형식이 잘못되었습니다. 올바른 형식: /귓속말:상대방ID 메시지"));
+                return;
             }
 
-            // 특정 개인에게 메시지 전달
-            WebSocketSession receiver = CLIENTS.get(receiverSessionId);
+            // 귓속말 대상 ID와 메시지 추출
+            String partialReceiverSessionId = parts[0].replace("/귓속말:", "");
+            String message = parts[1];
 
+            // 대상 세션 ID 찾기
+            String receiverSessionId = findReceiverSessionId(partialReceiverSessionId);
+
+            WebSocketSession receiver = CLIENTS.get(receiverSessionId);
             if (receiver != null && receiver.isOpen()) {
-                receiver.sendMessage(new TextMessage(senderId + " : " + st.nextToken()));
+                // 귓속말 전달
+                receiver.sendMessage(new TextMessage(senderId + "님의 귓속말: " + message));
+            } else {
+                // 대상이 접속 중이 아닐 경우
+                session.sendMessage(new TextMessage("귓속말 전송 실패: 상대방이 접속 중이지 않습니다."));
             }
         } else {
-            // 대화방 전체에 메시지 전달
-            CLIENTS.values().forEach(s -> {
-                try {
-                    // 자신을 제외한 참가자들에게 메시지 전달
-                    if (!sessionId.equals(s.getId())) {
-                        s.sendMessage(new TextMessage(senderId + " : " + textMessagePayload));
-                    }
-
-                } catch (IOException e) {
-                    throw new RuntimeException("message 전송 실패!!!");
-                }
-            });
+            // 전체 메시지 전달
+            broadcastMessage(sessionId, senderId, textMessagePayload);
         }
+    }
+
+    private String findReceiverSessionId(String partialId) {
+        for (Map.Entry<String, WebSocketSession> entry : CLIENTS.entrySet()) {
+            if (entry.getKey().contains(partialId)) {
+                return entry.getKey();
+            }
+        }
+        return null;
+    }
+
+    private void broadcastMessage(String senderSessionId, String senderId, String message) {
+        CLIENTS.values().forEach(client -> {
+            try {
+                if (!client.getId().equals(senderSessionId)) {
+                    client.sendMessage(new TextMessage(senderId + " : " + message));
+                }
+            } catch (IOException e) {
+                throw new RuntimeException("message 전송 실패!!!");
+            }
+        });
     }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
-        CLIENTS.remove(session.getId());
+        String sessionId = session.getId();
+
+        CLIENTS.remove(sessionId);
+
+        CLIENTS.values().forEach(s -> {
+            try {
+                s.sendMessage(new TextMessage(sessionId + "님이 대화방을 나가셨습니다."));
+            } catch (IOException e) {
+                throw new RuntimeException("message 전송 실패!!!");
+            }
+        });
     }
 }
