@@ -56,18 +56,62 @@ public class WebSocketHandler extends TextWebSocketHandler {
             // 대상 세션 ID 찾기
             String receiverSessionId = findReceiverSessionId(partialReceiverSessionId);
 
+            // 세션 ID 유효성 검사
+            if (receiverSessionId == null) {
+                sendMessageToSender(session, "귓속말 전송 실패: 대상 세션을 찾을 수 없습니다.");
+                return;
+            }
+
             WebSocketSession receiver = CLIENTS.get(receiverSessionId);
-            if (receiver != null && receiver.isOpen()) {
-                // 귓속말 전달
-                receiver.sendMessage(new TextMessage(senderId + "님의 귓속말: " + message));
+
+            // 수신자 유효성 검사
+            if (isSessionValid(receiver)) {
+                sendMessageToReceiver(receiver, senderId + "님의 귓속말: " + message);
             } else {
-                // 대상이 접속 중이 아닐 경우
-                session.sendMessage(new TextMessage("귓속말 전송 실패: 상대방이 접속 중이지 않습니다."));
+                sendMessageToSender(session, "귓속말 전송 실패: 상대방이 접속 중이지 않습니다.");
             }
         } else {
             // 전체 메시지 전달
             broadcastMessage(sessionId, senderId, textMessagePayload);
         }
+    }
+
+    @Override
+    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
+        String sessionId = session.getId();
+
+        CLIENTS.remove(sessionId);
+
+        CLIENTS.values().forEach(s -> {
+            try {
+                s.sendMessage(new TextMessage(sessionId + "님이 대화방을 나가셨습니다."));
+            } catch (IOException e) {
+                throw new RuntimeException("message 전송 실패!!!");
+            }
+        });
+    }
+
+    // 발신자에게 메시지 전송
+    private void sendMessageToSender(WebSocketSession sender, String message) {
+        try {
+            sender.sendMessage(new TextMessage(message));
+        } catch (IOException e) {
+            throw new RuntimeException("message 전송 실패!!!");
+        }
+    }
+
+    // 수신자에게 메시지 전송
+    private void sendMessageToReceiver(WebSocketSession receiver, String message) {
+        try {
+            receiver.sendMessage(new TextMessage(message));
+        } catch (IOException e) {
+            throw new RuntimeException("message 전송 실패!!!");
+        }
+    }
+
+    // 세션 유효성 검사
+    private boolean isSessionValid(WebSocketSession session) {
+        return session != null && session.isOpen();
     }
 
     private String findReceiverSessionId(String partialId) {
@@ -85,21 +129,6 @@ public class WebSocketHandler extends TextWebSocketHandler {
                 if (!client.getId().equals(senderSessionId)) {
                     client.sendMessage(new TextMessage(senderId + " : " + message));
                 }
-            } catch (IOException e) {
-                throw new RuntimeException("message 전송 실패!!!");
-            }
-        });
-    }
-
-    @Override
-    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
-        String sessionId = session.getId();
-
-        CLIENTS.remove(sessionId);
-
-        CLIENTS.values().forEach(s -> {
-            try {
-                s.sendMessage(new TextMessage(sessionId + "님이 대화방을 나가셨습니다."));
             } catch (IOException e) {
                 throw new RuntimeException("message 전송 실패!!!");
             }
